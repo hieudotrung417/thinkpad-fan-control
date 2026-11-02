@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+APPDIR=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
+PAYLOAD="$APPDIR/usr/lib/fanspeed"
+
+export LD_LIBRARY_PATH="$PAYLOAD/_internal${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GI_TYPELIB_PATH="$PAYLOAD/_internal/gi_typelibs${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+
+exec "$PAYLOAD/fanspeed-appimage" "$@"

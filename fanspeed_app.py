@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -44,6 +45,22 @@ HWMON_ROOT = Path("/sys/class/hwmon")
 
 def add_css_class(widget: Gtk.Widget, class_name: str) -> None:
     widget.get_style_context().add_class(class_name)
+
+
+def privileged_helper_command(mode: str) -> list[str]:
+    """Build the pkexec command for an installed app or a standalone AppImage."""
+    appimage = os.environ.get("APPIMAGE")
+    if appimage:
+        return [PKEXEC, str(Path(appimage).resolve()), "--fan-helper", "set", mode]
+    return [PKEXEC, str(HELPER), "set", mode]
+
+
+def configure_appimage_icon_path(indicator: object) -> None:
+    """Let the desktop shell resolve an icon stored inside the AppImage."""
+    appdir = os.environ.get("APPDIR")
+    if appdir:
+        icon_path = Path(appdir) / "usr/share/icons/hicolor/scalable/apps"
+        indicator.set_icon_theme_path(str(icon_path))
 
 
 def read_text(path: Path) -> str | None:
@@ -243,7 +260,7 @@ class FanSpeedWindow(Gtk.ApplicationWindow):
     def apply_mode(self, mode: str) -> None:
         if self.busy:
             return
-        if not HELPER.exists():
+        if not os.environ.get("APPIMAGE") and not HELPER.exists():
             self.show_error(
                 "The privileged helper is not installed.",
                 "Run sudo ./install.sh from the project directory, then reopen the app.",
@@ -259,7 +276,7 @@ class FanSpeedWindow(Gtk.ApplicationWindow):
     def run_helper(self, mode: str) -> None:
         try:
             result = subprocess.run(
-                [PKEXEC, str(HELPER), "set", mode],
+                privileged_helper_command(mode),
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -425,6 +442,7 @@ class FanSpeedApplication(Gtk.Application):
             APP_ID,
             AppIndicator.IndicatorCategory.HARDWARE,
         )
+        configure_appimage_icon_path(self.indicator)
         self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
         self.indicator.set_title("ThinkPad Fan Control")
         self.indicator.set_menu(menu)
@@ -485,6 +503,7 @@ class FanSpeedApplication(Gtk.Application):
                 APP_ID,
                 AppIndicator.IndicatorCategory.HARDWARE,
             )
+            configure_appimage_icon_path(self.indicator)
             self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
             self.indicator.set_title("ThinkPad Fan Control")
             self.indicator.set_menu(menu)

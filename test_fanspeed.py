@@ -1,12 +1,13 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import gi
 
 import fanspeed_app
 import fanspeed_helper
+import appimage_entry
 
 
 try:
@@ -17,6 +18,34 @@ except ValueError:
 
 
 class FanSpeedAppTests(unittest.TestCase):
+    def test_appimage_uses_itself_as_the_privileged_helper(self):
+        with patch.dict(
+            "os.environ", {"APPIMAGE": "/tmp/ThinkPad Fan Control.AppImage"}, clear=False
+        ):
+            self.assertEqual(
+                fanspeed_app.privileged_helper_command("4"),
+                [
+                    "/usr/bin/pkexec",
+                    "/tmp/ThinkPad Fan Control.AppImage",
+                    "--fan-helper",
+                    "set",
+                    "4",
+                ],
+            )
+
+    def test_appimage_helper_entrypoint_delegates_only_helper_arguments(self):
+        with patch.object(fanspeed_helper, "main", return_value=17) as helper_main:
+            self.assertEqual(appimage_entry.main(["--fan-helper", "set", "5"]), 17)
+        helper_main.assert_called_once_with(["set", "5"])
+
+    def test_appimage_exposes_its_bundled_icon_to_the_tray_host(self):
+        indicator = Mock()
+        with patch.dict("os.environ", {"APPDIR": "/tmp/fanspeed.AppDir"}, clear=False):
+            fanspeed_app.configure_appimage_icon_path(indicator)
+        indicator.set_icon_theme_path.assert_called_once_with(
+            "/tmp/fanspeed.AppDir/usr/share/icons/hicolor/scalable/apps"
+        )
+
     @unittest.skipUnless(
         LEGACY_INDICATOR_AVAILABLE,
         "The DBusMenu-compatible AppIndicator binding is not installed.",

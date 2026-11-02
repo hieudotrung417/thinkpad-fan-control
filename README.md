@@ -34,6 +34,30 @@ for interactive menus in GNOME's status bar. On other distributions, install
 the corresponding AyatanaAppIndicator GObject-introspection package before
 running the installer.
 
+## AppImage
+
+Download `ThinkPad_Fan_Control-x86_64.AppImage`, make it executable, and run it:
+
+```bash
+chmod +x ThinkPad_Fan_Control-x86_64.AppImage
+./ThinkPad_Fan_Control-x86_64.AppImage
+```
+
+The AppImage bundles the application, Python, GTK, and AppIndicator libraries.
+Fan changes still display the normal PolicyKit authentication prompt, but the
+AppImage does not install a privileged helper or other files on the system.
+
+To build the AppImage reproducibly in the Ubuntu 22.04 container:
+
+```bash
+./build-appimage.sh
+```
+
+The artifact is written to `dist/ThinkPad_Fan_Control-x86_64.AppImage`.
+GitHub Actions also publishes it as a workflow artifact. Pushing a tag such as
+`v1.0.0` creates a GitHub release and attaches the executable AppImage for
+direct download.
+
 ## Uninstall
 
 From the project directory, run:
