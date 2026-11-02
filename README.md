@@ -1,12 +1,13 @@
 # ThinkPad Fan Control
 
-A small native GTK 4 app for monitoring and manually controlling the fans on
+A small native GTK app for monitoring and manually controlling the fans on
 this ThinkPad T14 Gen 5. It supports:
 
 - automatic firmware control;
 - manual fan levels 1 through 7;
 - full-speed cooling;
-- live fan RPM and CPU/GPU temperature readings.
+- live fan RPM and CPU/GPU temperature readings;
+- a Linux status-bar menu for changing fan speed without opening the window.
 
 The desktop app runs as the normal user. A narrow, root-owned helper performs
 only validated fan-mode changes through `thinkpad_acpi`; PolicyKit displays the
@@ -26,6 +27,41 @@ Then open **ThinkPad Fan Control** from the Ubuntu app launcher, or run:
 ```bash
 fanspeed
 ```
+
+The installer adds the GTK 3 Ayatana AppIndicator binding on Ubuntu when it is
+not already installed. This binding provides the DBusMenu interface required
+for interactive menus in GNOME's status bar. On other distributions, install
+the corresponding AyatanaAppIndicator GObject-introspection package before
+running the installer.
+
+## Uninstall
+
+From the project directory, run:
+
+```bash
+sudo ./uninstall.sh
+```
+
+The installer also places the uninstaller on the system, so this works even if
+the project directory has been deleted:
+
+```bash
+sudo fanspeed-uninstall
+```
+
+The uninstaller restores automatic firmware fan control, stops the installed
+status-bar process, and removes the application, launcher, icon, privileged
+helper, PolicyKit policy, and installed uninstaller. Shared GTK and
+AppIndicator packages are retained because other applications may use them.
+
+## Status-bar controls
+
+The status-bar icon displays the current mode: `A` for automatic, `1` through
+`7` for a manual level, and `MAX` for full speed. Open its menu to see live
+temperature/RPM information and switch modes immediately.
+
+Closing the main window leaves the app running in the status bar. Choose
+**Open Fan Control** to restore the window, or **Quit** to exit completely.
 
 ## How fan control works
 

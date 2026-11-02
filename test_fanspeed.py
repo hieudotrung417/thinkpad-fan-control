@@ -3,11 +3,50 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import gi
+
 import fanspeed_app
 import fanspeed_helper
 
 
+try:
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    LEGACY_INDICATOR_AVAILABLE = True
+except ValueError:
+    LEGACY_INDICATOR_AVAILABLE = False
+
+
 class FanSpeedAppTests(unittest.TestCase):
+    @unittest.skipUnless(
+        LEGACY_INDICATOR_AVAILABLE,
+        "The DBusMenu-compatible AppIndicator binding is not installed.",
+    )
+    def test_prefers_dbusmenu_backend_for_interactive_gnome_menu(self):
+        self.assertFalse(fanspeed_app.MODERN_INDICATOR)
+
+    def test_formats_automatic_tray_status(self):
+        state = {
+            "mode": "Automatic",
+            "rpm": [2400, 2300],
+            "cpu_temp": 57.5,
+            "gpu_temp": None,
+        }
+        short_mode, details, selected_mode = fanspeed_app.tray_status(state)
+        self.assertEqual(short_mode, "A")
+        self.assertEqual(selected_mode, "auto")
+        self.assertIn("2,400 RPM / 2,300 RPM", details)
+        self.assertIn("CPU 57.5°C", details)
+
+    def test_formats_manual_and_full_speed_tray_modes(self):
+        self.assertEqual(
+            fanspeed_app.tray_status({"mode": "Manual level 4", "rpm": []}),
+            ("4", "Manual level 4", "4"),
+        )
+        self.assertEqual(
+            fanspeed_app.tray_status({"mode": "Full speed", "rpm": []}),
+            ("MAX", "Full speed", "full-speed"),
+        )
+
     def test_reads_hwmon_temperature(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
