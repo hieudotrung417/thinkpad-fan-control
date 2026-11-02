@@ -46,6 +46,9 @@ chmod +x ThinkPad_Fan_Control-x86_64.AppImage
 The AppImage bundles the application, Python, GTK, and AppIndicator libraries.
 Fan changes still display the normal PolicyKit authentication prompt, but the
 AppImage does not install a privileged helper or other files on the system.
+Authentication is requested once when the app starts. A narrowly scoped helper
+remains active only for that app session, so status-bar speed changes do not
+prompt again. Closing the app ends the privileged helper session.
 
 To build the AppImage reproducibly in the Ubuntu 22.04 container:
 

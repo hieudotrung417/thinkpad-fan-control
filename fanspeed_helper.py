@@ -87,12 +87,36 @@ def write_mode(mode: str) -> str:
     return f"Manual fan level {mode} enabled."
 
 
+def serve(input_stream: object = sys.stdin, output_stream: object = sys.stdout) -> int:
+    """Serve validated mode changes over private inherited standard-I/O pipes."""
+    print(json.dumps({"ready": True}), file=output_stream, flush=True)
+    for line in input_stream:
+        try:
+            request = json.loads(line)
+            if not isinstance(request, dict) or set(request) != {"mode"}:
+                raise ControlError("Invalid helper request.")
+            mode = request["mode"]
+            if not isinstance(mode, str):
+                raise ControlError("Invalid fan mode.")
+            message = write_mode(mode)
+            response = {"ok": True, "message": message}
+        except (ControlError, json.JSONDecodeError) as error:
+            response = {"ok": False, "error": str(error)}
+        print(json.dumps(response), file=output_stream, flush=True)
+    return 0
+
+
 def main(arguments: list[str]) -> int:
     if os.geteuid() != 0:
         print("This helper must be run through pkexec.", file=sys.stderr)
         return 1
+    if arguments == ["serve"]:
+        return serve()
     if len(arguments) != 2 or arguments[0] != "set":
-        print("Usage: fanspeed-helper set {auto|1..7|full-speed}", file=sys.stderr)
+        print(
+            "Usage: fanspeed-helper {serve|set {auto|1..7|full-speed}}",
+            file=sys.stderr,
+        )
         return 2
     try:
         message = write_mode(arguments[1])

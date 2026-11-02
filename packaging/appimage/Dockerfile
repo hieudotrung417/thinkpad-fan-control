@@ -1,7 +1,6 @@
 FROM ubuntu:22.04 AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG APP_VERSION=1.0.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         binutils \
@@ -55,6 +54,8 @@ RUN mkdir -p \
     && sed -i 's/^Exec=.*/Exec=fanspeed-appimage/' \
         /build/AppDir/io.github.fanspeed.FanSpeed.desktop \
         /build/AppDir/usr/share/applications/io.github.fanspeed.FanSpeed.desktop
+
+ARG APP_VERSION=1.0.0
 
 RUN wget -q \
         https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage \

@@ -47,12 +47,12 @@ def add_css_class(widget: Gtk.Widget, class_name: str) -> None:
     widget.get_style_context().add_class(class_name)
 
 
-def privileged_helper_command(mode: str) -> list[str]:
+def privileged_helper_command(*arguments: str) -> list[str]:
     """Build the pkexec command for an installed app or a standalone AppImage."""
     appimage = os.environ.get("APPIMAGE")
     if appimage:
-        return [PKEXEC, str(Path(appimage).resolve()), "--fan-helper", "set", mode]
-    return [PKEXEC, str(HELPER), "set", mode]
+        return [PKEXEC, str(Path(appimage).resolve()), "--fan-helper", *arguments]
+    return [PKEXEC, str(HELPER), *arguments]
 
 
 def configure_appimage_icon_path(indicator: object) -> None:
@@ -157,6 +157,111 @@ def tray_status(state: dict[str, object]) -> tuple[str, str, str | None]:
     return short_mode, "  •  ".join(details), selected_mode
 
 
+class FanSessionError(RuntimeError):
+    pass
+
+
+class PrivilegedFanSession:
+    """One authenticated helper process, private to this application instance."""
+
+    def __init__(self) -> None:
+        self.process: subprocess.Popen[str] | None = None
+        self.lock = threading.Lock()
+
+    @property
+    def ready(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def _open_locked(self) -> None:
+        if self.ready:
+            return
+        self.close_locked()
+        try:
+            process = subprocess.Popen(
+                privileged_helper_command("serve"),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as error:
+            raise FanSessionError(str(error)) from error
+        self.process = process
+        assert process.stdout is not None
+        ready_line = process.stdout.readline()
+        if not ready_line:
+            returncode = process.wait()
+            detail = process.stderr.read().strip() if process.stderr else ""
+            self.process = None
+            if returncode in (126, 127):
+                detail = "Authorization was cancelled or denied."
+            raise FanSessionError(detail or "The privileged helper did not start.")
+        try:
+            response = json.loads(ready_line)
+        except json.JSONDecodeError as error:
+            self.close_locked()
+            raise FanSessionError("The privileged helper returned invalid data.") from error
+        if response != {"ready": True}:
+            self.close_locked()
+            raise FanSessionError("The privileged helper did not become ready.")
+
+    def open(self) -> None:
+        with self.lock:
+            self._open_locked()
+
+    def set_mode(self, mode: str) -> str:
+        with self.lock:
+            self._open_locked()
+            process = self.process
+            assert process is not None and process.stdin is not None
+            assert process.stdout is not None
+            try:
+                process.stdin.write(json.dumps({"mode": mode}) + "\n")
+                process.stdin.flush()
+                response_line = process.stdout.readline()
+            except (BrokenPipeError, OSError) as error:
+                self.close_locked()
+                raise FanSessionError("The privileged helper session ended.") from error
+            if not response_line:
+                self.close_locked()
+                raise FanSessionError("The privileged helper session ended.")
+            try:
+                response = json.loads(response_line)
+            except json.JSONDecodeError as error:
+                raise FanSessionError("The privileged helper returned invalid data.") from error
+            if not response.get("ok"):
+                raise FanSessionError(response.get("error", "The helper failed."))
+            return response.get("message", "Fan mode changed.")
+
+    def close_locked(self) -> None:
+        process = self.process
+        self.process = None
+        if process is None:
+            return
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+
+    def close(self) -> None:
+        # If startup authentication is still pending, wake the thread blocked
+        # on the helper's first response before waiting for its lock.
+        process = self.process
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+        with self.lock:
+            self.close_locked()
+
+
 class FanSpeedWindow(Gtk.ApplicationWindow):
     def __init__(self, application: "FanSpeedApplication") -> None:
         super().__init__(application=application, title="ThinkPad Fan Control")
@@ -240,6 +345,8 @@ class FanSpeedWindow(Gtk.ApplicationWindow):
         self.busy = False
         self.refresh_status()
         GLib.timeout_add_seconds(2, self.refresh_status)
+        if os.environ.get("APPIMAGE") or HELPER.exists():
+            self.begin_authorization()
 
     def on_apply_level(self, _button: Gtk.Button) -> None:
         level = self.level_dropdown.get_active() + 1
@@ -269,34 +376,42 @@ class FanSpeedWindow(Gtk.ApplicationWindow):
 
         self.busy = True
         self.set_controls_sensitive(False)
-        self.message_label.set_text("Waiting for authorization…")
+        self.message_label.set_text(
+            "Changing fan mode…"
+            if self.get_application().fan_session.ready
+            else "Waiting for authorization…"
+        )
         thread = threading.Thread(target=self.run_helper, args=(mode,), daemon=True)
         thread.start()
 
+    def begin_authorization(self) -> None:
+        if self.busy or self.get_application().fan_session.ready:
+            return
+        self.busy = True
+        self.set_controls_sensitive(False)
+        self.message_label.set_text("Authorize once to unlock fan control for this session…")
+        threading.Thread(target=self.run_authorization, daemon=True).start()
+
+    def run_authorization(self) -> None:
+        try:
+            self.get_application().fan_session.open()
+            GLib.idle_add(self.finish_authorization, True, "Fan control unlocked.")
+        except FanSessionError as error:
+            GLib.idle_add(self.finish_authorization, False, str(error))
+
+    def finish_authorization(self, succeeded: bool, message: str) -> bool:
+        self.busy = False
+        self.set_controls_sensitive(True)
+        self.message_label.set_text(
+            message if succeeded else "Fan control is locked. Select a mode to retry."
+        )
+        return GLib.SOURCE_REMOVE
+
     def run_helper(self, mode: str) -> None:
         try:
-            result = subprocess.run(
-                privileged_helper_command(mode),
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
-            )
-            if result.returncode == 0:
-                try:
-                    payload = json.loads(result.stdout)
-                    message = payload.get("message", "Fan mode changed.")
-                except json.JSONDecodeError:
-                    message = "Fan mode changed."
-                GLib.idle_add(self.finish_apply, True, message)
-            else:
-                detail = result.stderr.strip() or result.stdout.strip()
-                if result.returncode in (126, 127):
-                    detail = "Authorization was cancelled or denied."
-                GLib.idle_add(self.finish_apply, False, detail or "The helper failed.")
-        except subprocess.TimeoutExpired:
-            GLib.idle_add(self.finish_apply, False, "Authorization timed out.")
-        except OSError as error:
+            message = self.get_application().fan_session.set_mode(mode)
+            GLib.idle_add(self.finish_apply, True, message)
+        except FanSessionError as error:
             GLib.idle_add(self.finish_apply, False, str(error))
 
     def finish_apply(self, succeeded: bool, message: str) -> bool:
@@ -358,6 +473,7 @@ class FanSpeedApplication(Gtk.Application):
         self.gio_mode_action: Gio.SimpleAction | None = None
         self.gio_quit_action: Gio.SimpleAction | None = None
         self.updating_tray = False
+        self.fan_session = PrivilegedFanSession()
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
@@ -586,6 +702,10 @@ class FanSpeedApplication(Gtk.Application):
         window = self.get_fan_window()
         window.show_all()
         window.present()
+
+    def do_shutdown(self) -> None:
+        self.fan_session.close()
+        Gtk.Application.do_shutdown(self)
 
 
 if __name__ == "__main__":

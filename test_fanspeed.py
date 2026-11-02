@@ -1,3 +1,5 @@
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,15 +25,60 @@ class FanSpeedAppTests(unittest.TestCase):
             "os.environ", {"APPIMAGE": "/tmp/ThinkPad Fan Control.AppImage"}, clear=False
         ):
             self.assertEqual(
-                fanspeed_app.privileged_helper_command("4"),
+                fanspeed_app.privileged_helper_command("serve"),
                 [
                     "/usr/bin/pkexec",
                     "/tmp/ThinkPad Fan Control.AppImage",
                     "--fan-helper",
-                    "set",
-                    "4",
+                    "serve",
                 ],
             )
+
+    def test_privileged_session_reuses_one_helper_for_multiple_changes(self):
+        responses = io.StringIO(
+            "\n".join(
+                (
+                    json.dumps({"ready": True}),
+                    json.dumps({"ok": True, "message": "Level 3"}),
+                    json.dumps({"ok": True, "message": "Automatic"}),
+                    "",
+                )
+            )
+        )
+        process = Mock(
+            stdin=io.StringIO(),
+            stdout=responses,
+            stderr=io.StringIO(),
+        )
+        process.poll.return_value = None
+        session = fanspeed_app.PrivilegedFanSession()
+        with patch.object(fanspeed_app.subprocess, "Popen", return_value=process) as popen:
+            self.assertEqual(session.set_mode("3"), "Level 3")
+            self.assertEqual(session.set_mode("auto"), "Automatic")
+        popen.assert_called_once()
+        self.assertEqual(
+            process.stdin.getvalue().splitlines(),
+            [json.dumps({"mode": "3"}), json.dumps({"mode": "auto"})],
+        )
+
+    def test_helper_server_validates_every_request(self):
+        input_stream = io.StringIO(
+            json.dumps({"mode": "4"}) + "\n" + json.dumps({"mode": "0"}) + "\n"
+        )
+        output_stream = io.StringIO()
+
+        def validate(mode: str) -> str:
+            if mode == "0":
+                raise fanspeed_helper.ControlError("Invalid fan mode.")
+            return "Level 4"
+
+        with patch.object(fanspeed_helper, "write_mode", side_effect=validate) as write:
+            self.assertEqual(fanspeed_helper.serve(input_stream, output_stream), 0)
+        responses = [json.loads(line) for line in output_stream.getvalue().splitlines()]
+        self.assertEqual(responses[0], {"ready": True})
+        self.assertEqual(responses[1], {"ok": True, "message": "Level 4"})
+        self.assertEqual(responses[2], {"ok": False, "error": "Invalid fan mode."})
+        self.assertEqual(write.call_count, 2)
 
     def test_appimage_helper_entrypoint_delegates_only_helper_arguments(self):
         with patch.object(fanspeed_helper, "main", return_value=17) as helper_main:
