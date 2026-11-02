@@ -1,0 +1,62 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import fanspeed_app
+import fanspeed_helper
+
+
+class FanSpeedAppTests(unittest.TestCase):
+    def test_reads_hwmon_temperature(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            device = root / "hwmon0"
+            device.mkdir()
+            (device / "name").write_text("k10temp\n")
+            (device / "temp1_input").write_text("57500\n")
+            with patch.object(fanspeed_app, "HWMON_ROOT", root):
+                found = fanspeed_app.find_hwmon("k10temp")
+                self.assertEqual(found, device)
+                self.assertEqual(fanspeed_app.read_millidegrees(found / "temp1_input"), 57.5)
+
+    def test_helper_rejects_unsafe_modes(self):
+        with self.assertRaises(fanspeed_helper.ControlError):
+            fanspeed_helper.write_mode("0")
+        with self.assertRaises(fanspeed_helper.ControlError):
+            fanspeed_helper.write_mode("99")
+
+    def test_auto_does_not_reload_module_when_control_is_disabled(self):
+        with patch.object(fanspeed_helper, "fan_control_enabled", return_value=False):
+            self.assertEqual(
+                fanspeed_helper.write_mode("auto"),
+                "Automatic firmware control is already active.",
+            )
+
+    def test_manual_level_writes_validated_kernel_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            interface = Path(directory) / "fan"
+            interface.touch()
+            with (
+                patch.object(fanspeed_helper, "PROC_FAN", interface),
+                patch.object(fanspeed_helper, "enable_manual_control"),
+            ):
+                message = fanspeed_helper.write_mode("7")
+            self.assertEqual(interface.read_text(), "level 7\n")
+            self.assertEqual(message, "Manual fan level 7 enabled.")
+
+    def test_auto_writes_restore_command_when_manual_control_is_enabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            interface = Path(directory) / "fan"
+            interface.touch()
+            with (
+                patch.object(fanspeed_helper, "PROC_FAN", interface),
+                patch.object(fanspeed_helper, "fan_control_enabled", return_value=True),
+            ):
+                message = fanspeed_helper.write_mode("auto")
+            self.assertEqual(interface.read_text(), "level auto\n")
+            self.assertEqual(message, "Automatic fan control restored.")
+
+
+if __name__ == "__main__":
+    unittest.main()

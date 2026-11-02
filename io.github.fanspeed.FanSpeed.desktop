@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ThinkPad Fan Control
+Comment=Monitor and control ThinkPad fan speed
+Exec=fanspeed
+Icon=io.github.fanspeed.FanSpeed
+Terminal=false
+Categories=Settings;
+Keywords=fan;cooling;temperature;ThinkPad;
+StartupNotify=true
